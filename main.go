@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
+	"github.com/draftms/go_web/billingService"
 )
 
 func BillingService(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +34,7 @@ func main() {
 	mux.HandleFunc("/", MainHandler(IndexMain))
 	mux.HandleFunc("/billing", MainHandler(BillingService))
 	mux.HandleFunc("/statistics", MainHandler(StatisticsService))
+	mux.HandleFunc("/billingAnalyze", MainHandler((&billingService.Billing{}).GetBillMonth))
 
 	http.ListenAndServe(":8000", mux)
 }

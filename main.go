@@ -6,14 +6,11 @@ import (
 	"net/http"
 
 	"github.com/draftms/go_web/billingService"
+	"github.com/draftms/go_web/statisticsService"
 )
 
 func BillingService(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "Hello Billing Service")
-}
-
-func StatisticsService(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "Hello Statistics Service")
 }
 
 func IndexMain(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +30,7 @@ func main() {
 
 	mux.HandleFunc("/", MainHandler(IndexMain))
 	mux.HandleFunc("/billing", MainHandler(BillingService))
-	mux.HandleFunc("/statistics", MainHandler(StatisticsService))
+	mux.HandleFunc("/statistics", MainHandler((&statisticsService.Statistics{}).GetStatisticsModality))
 	mux.HandleFunc("/billingAnalyze", MainHandler((&billingService.Billing{}).GetBillMonth))
 
 	http.ListenAndServe(":8000", mux)

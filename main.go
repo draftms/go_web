@@ -37,4 +37,9 @@ func main() {
 	mux.HandleFunc("/billingAnalyze", MainHandler((&billingService.Billing{}).GetBillMonth))
 
 	http.ListenAndServe(":8000", mux)
+
+	/* TO-DO
+	1. Login & Session Control
+	2. Get ASP.NET Sesstion State data
+	*/
 }

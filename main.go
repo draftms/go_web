@@ -1,19 +1,22 @@
 package main
 
 import (
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
+	_ "time"
 
-	_"github.com/draftms/go_web/billingService"
+	_ "github.com/draftms/go_web/billingService"
 	"github.com/draftms/go_web/statisticsService"
 	"github.com/unrolled/render"
 
-	_"github.com/google/uuid"
+	_ "github.com/google/uuid"
 	"github.com/gorilla/mux"
-	_"github.com/gorilla/securecookie"
+	_ "github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 	"github.com/urfave/negroni"
 )
@@ -35,7 +38,8 @@ func BillingService(w http.ResponseWriter, r *http.Request) {
 
 func IndexMain(w http.ResponseWriter, r *http.Request) {
 	//rd.Text(w, http.StatusOK, uuid.New().String())
-	rd.Text(w, http.StatusOK, os.Getenv("SESSION_KEY"))
+	//rd.Text(w, http.StatusOK, os.Getenv("SESSION_KEY"))
+	rd.Text(w, http.StatusOK, "test")
 }
 
 func getUserInfoHandler(w http.ResponseWriter, r *http.Request) {
@@ -55,12 +59,6 @@ func setUserInfoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rd.JSON(w, http.StatusOK, user)	
-	/*
-	w.Header().Add("Content-type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	data, _ := json.Marshal(user)
-	fmt.Fprint(w, string(data))	
-	*/
 }
 
 func MainHandler(next http.HandlerFunc) http.HandlerFunc {
@@ -82,58 +80,86 @@ func getUser(s * sessions.Session) User {
 	return user
 }
 
-func login(w http.ResponseWriter, r *http.Request) {
-	session, _:= store.Get(r, "tele-on")
+func rootHandler(w http.ResponseWriter, r *http.Request) {
+	if checkauthenticate(w, r){
+		t, _ := template.ParseFiles("templates/home.gohtml")
+		t.Execute(w, "welcome home")
+	}else {
+		t, _ := template.ParseFiles("templates/login.gohtml")
+		t.Execute(w, "test login template")
+	}
+}
 
-	//json.NewDecoder(r.Body).Decode(user)
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	session, _ := store.Get(r, "teleon")
 
 	session.Values["authenticated"] = true
-	session.Save(r,w)
+	session.Save(r, w)
+
+	http.Redirect(w, r, "/", http.StatusMovedPermanently)
+}
+
+func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	session, _ := store.Get(r, "teleon")
+
+	session.Values["authenticated"] = false
+	session.Save(r, w)
+
+	http.Redirect(w, r, "/", http.StatusMovedPermanently)
+}
+
+func checkauthenticate(w http.ResponseWriter, r *http.Request) bool {
+	session, _ := store.Get(r, "teleon")
+
+	if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
+		return false
+	} else {
+		return true
+	}
 }
 
 func checkAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
 		log.Println("Check Auth : ", r.URL.Path)
 
-		session, err := store.Get(r, "tele-on")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		user := getUser(session)
-
-		if auth := user.Authenticated; !auth {
-			session.AddFlash("you don't have access!")
-			err = sessions.Save(r, w)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			http.Redirect(w,r, "/forbidden.html", http.StatusFound)
-		}
-
-		log.Println("Check Auth : ", r.URL.Path, user.Name)
-
-		next.ServeHTTP(w, r)
+		if checkauthenticate(w, r) {
+			next.ServeHTTP(w, r)
+		} else {
+			t, _ := template.ParseFiles("templates/login.gohtml")
+			t.Execute(w, "test login template")
+		} 
 	})
 }
 
 func main() {
 
+ 	store.Options = &sessions.Options{
+		MaxAge : 60 * 60,
+		HttpOnly: true,
+	}
+
+	gob.Register(User{})
+	template.Must(template.ParseGlob("templates/*.gohtml"))
+
+ 
 	rd = render.New()
 	router := mux.NewRouter()
-	secureRouter := mux.NewRouter()
 
-	router.HandleFunc("/", IndexMain)
-	router.HandleFunc("/login", login).Methods("GET")
+	router.NotFoundHandler = http.HandlerFunc(rootHandler)
 
-	secureRouter.HandleFunc("/billing", BillingService).Methods("GET")
-	secureRouter.HandleFunc("/statistics", (&statisticsService.Statistics{}).GetStatisticsModality)
+	router.HandleFunc("/", rootHandler)
+	router.HandleFunc("/login", loginHandler).Methods("POST")
+	router.HandleFunc("/logout", logoutHandler).Methods("POST")
 
-	secureRouter.Use(checkAuthMiddleware)
+	billingRouter := router.PathPrefix("/billing").Subrouter()
+	billingRouter.HandleFunc("", BillingService)
+	billingRouter.Use(checkAuthMiddleware)
+
+	statisticsRouter := router.PathPrefix("/statistics").Subrouter()
+	statisticsRouter.HandleFunc("", (&statisticsService.Statistics{}).GetStatisticsModality)
+	statisticsRouter.Use(checkAuthMiddleware)
 
 	neg := negroni.Classic()
 	neg.UseHandler(router)
-	neg.UseHandler(secureRouter)
-	http.ListenAndServe(":8000", neg)
+	http.ListenAndServe(":7500", neg)
 }

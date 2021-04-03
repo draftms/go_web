@@ -8,12 +8,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 	_ "time"
 
 	_ "github.com/draftms/go_web/billingService"
 	"github.com/draftms/go_web/statisticsService"
 	"github.com/unrolled/render"
 
+	"github.com/dgrijalva/jwt-go"
 	_ "github.com/google/uuid"
 	"github.com/gorilla/mux"
 	_ "github.com/gorilla/securecookie"
@@ -31,6 +33,24 @@ type User struct {
 	Class string 		`json:"class"`
 	Authenticated bool
 }
+
+var users = map[string] string{
+	"user1":"password1",
+	"user2":"password2",
+}
+
+var jwtKey = []byte("AllYourBase")
+
+type Credentials struct {
+	Password string `json:"password"`
+	Username string `json:"username"`
+}
+
+type JWTClaims struct {
+	Username string `json:"username"`
+	jwt.StandardClaims
+}
+
 
 func BillingService(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "Hello Billing Service")
@@ -90,6 +110,47 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func DBAuthCheck() bool {
+	return true
+}
+
+func JWTloginHandler(w http.ResponseWriter, r *http.Request) {
+	var creds Credentials
+	err := json.NewDecoder(r.Body).Decode(&creds)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	expectedPassword, ok := users[creds.Username]
+
+	if !ok || expectedPassword != creds.Password {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	expirationTime := time.Now().Add(5*time.Minute)
+	claims := &JWTClaims{
+		Username: creds.Username,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expirationTime.Unix(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(jwtKey)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name: "token",
+		Value: tokenString, 
+		Expires: expirationTime,
+	})
+}
+
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	session, err := store.Get(r, "teleon")
 	if err != nil {
@@ -101,9 +162,10 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		ID: r.PostFormValue("txtID"),
 		Authenticated: true,
 	}
-
-	session.Values["user"] = user
-	session.Save(r, w)
+	if  DBAuthCheck() {
+		session.Values["user"] = user
+		session.Save(r, w)
+	}
 
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -176,6 +238,8 @@ func main() {
 	router.HandleFunc("/", rootHandler)
 	router.HandleFunc("/login", loginHandler).Methods("POST")
 	router.HandleFunc("/logout", logoutHandler).Methods("POST")
+
+	router.HandleFunc("/jwtlogin", JWTloginHandler).Methods("POST")
 
 	billingRouter := router.PathPrefix("/billing").Subrouter()
 	billingRouter.HandleFunc("", BillingService)

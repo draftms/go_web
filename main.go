@@ -91,31 +91,57 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
-	session, _ := store.Get(r, "teleon")
+	session, err := store.Get(r, "teleon")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	session.Values["authenticated"] = true
+	user := &User {
+		ID: r.PostFormValue("txtID"),
+		Authenticated: true,
+	}
+
+	session.Values["user"] = user
 	session.Save(r, w)
 
-	http.Redirect(w, r, "/", http.StatusMovedPermanently)
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
-	session, _ := store.Get(r, "teleon")
+	session, err := store.Get(r, "teleon")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	session.Values["authenticated"] = false
+	session.Values["user"] = User{}
+	session.Options.MaxAge = -1
 	session.Save(r, w)
 
-	http.Redirect(w, r, "/", http.StatusMovedPermanently)
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func checkauthenticate(w http.ResponseWriter, r *http.Request) bool {
 	session, _ := store.Get(r, "teleon")
 
+	user := getUser(session)
+
+	if auth := user.Authenticated; !auth {
+		session.AddFlash("You don't have access!")
+		session.Save(r,w)
+		return false
+	}
+
+	return true
+
+	/* 
 	if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
 		return false
 	} else {
 		return true
 	}
+ 	*/
 }
 
 func checkAuthMiddleware(next http.Handler) http.Handler {
@@ -162,4 +188,9 @@ func main() {
 	neg := negroni.Classic()
 	neg.UseHandler(router)
 	http.ListenAndServe(":7500", neg)
+
+	/*
+	to-do
+	1. 로그인 시 user 정보 저장
+	*/
 }

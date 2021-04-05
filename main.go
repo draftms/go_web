@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	_"strings"
 	"time"
 	_ "time"
 
@@ -27,26 +28,23 @@ var rd *render.Render
 var store = sessions.NewCookieStore([]byte(os.Getenv("SESSION_KEY")))
 
 type User struct {
-	ID string 			`json:"id"`
+	ID string 			`json:"userid"`
 	Name string 		`json:"name"`
+	Password string 	`json:"password"`
 	Email string 		`json:"email"`
 	Class string 		`json:"class"`
 	Authenticated bool
 }
 
 var users = map[string] string{
-	"user1":"password1",
+	"teleid":"teleon",
 	"user2":"password2",
 }
 
-var jwtKey = []byte("AllYourBase")
-
-type Credentials struct {
-	Password string `json:"password"`
-	Username string `json:"username"`
-}
+var jwtKey = []byte(os.Getenv("SESSION_KEY"))
 
 type JWTClaims struct {
+	UserID string `json:"userid"`
 	Username string `json:"username"`
 	jwt.StandardClaims
 }
@@ -110,28 +108,39 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func DBAuthCheck() bool {
+func JWTRootHandler(w http.ResponseWriter, r *http.Request) {
+	if checkJWTAuthenticate(r){
+		t, _ := template.ParseFiles("templates/home.gohtml")
+		t.Execute(w, "welcome home")
+	}else {
+		t, _ := template.ParseFiles("templates/login.gohtml")
+		t.Execute(w, "test login template")
+	}
+}
+
+func DBAuthCheck(id string, pw string) bool {
 	return true
 }
 
 func JWTloginHandler(w http.ResponseWriter, r *http.Request) {
-	var creds Credentials
-	err := json.NewDecoder(r.Body).Decode(&creds)
+
+	var user User
+	err := json.NewDecoder(r.Body).Decode(&user)
+
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	expectedPassword, ok := users[creds.Username]
-
-	if !ok || expectedPassword != creds.Password {
+	if !DBAuthCheck(user.ID, user.Password) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
 	expirationTime := time.Now().Add(5*time.Minute)
 	claims := &JWTClaims{
-		Username: creds.Username,
+		UserID: user.ID,
+		Username: user.Name,
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: expirationTime.Unix(),
 		},
@@ -145,10 +154,14 @@ func JWTloginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.SetCookie(w, &http.Cookie{
-		Name: "token",
+		Name: "access-token",
 		Value: tokenString, 
 		Expires: expirationTime,
+		MaxAge: 60*60,
+		HttpOnly: true,
 	})
+
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -160,12 +173,25 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 	user := &User {
 		ID: r.PostFormValue("txtID"),
+		Password: r.PostFormValue("txtPW"),
 		Authenticated: true,
 	}
-	if  DBAuthCheck() {
+	if  DBAuthCheck(user.ID, user.Password) {
 		session.Values["user"] = user
 		session.Save(r, w)
 	}
+
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func JWTlogoutHandler(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name: "access-token",
+		Value: "", 
+		Expires: time.Unix(0,0),
+		MaxAge: -1,
+		HttpOnly: true,
+	})
 
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -184,6 +210,55 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+func checkJWTAuthenticate(r *http.Request) bool {
+	JWTTokenStringFromCookie, err := r.Cookie("access-token")
+
+	if err != nil {
+		return false
+	}
+
+	token, err := jwt.Parse(JWTTokenStringFromCookie.Value, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("Thre was an error!")
+		}
+		return jwtKey, nil
+	})
+
+	if err != nil {
+		return false
+	}
+
+	if token.Valid {
+		return true
+	}
+
+	return false
+}
+
+func isAuthorizedByJWT(endpoint func(http.ResponseWriter, *http.Request)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tokenString, _ := r.Cookie("access-token"); tokenString != nil {
+			token, err := jwt.Parse(tokenString.Value, func(token *jwt.Token)(interface{}, error) {
+				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, fmt.Errorf("There was an error")
+				}
+				return jwtKey, nil
+			})
+
+			if err != nil {
+				fmt.Fprint(w, err.Error())
+			}
+
+			if token.Valid {
+				endpoint(w, r)
+			}
+		} else {
+			fmt.Fprintf(w, "Not Authorized")
+		}
+
+	})
+}
+
 func checkauthenticate(w http.ResponseWriter, r *http.Request) bool {
 	session, _ := store.Get(r, "teleon")
 
@@ -196,14 +271,6 @@ func checkauthenticate(w http.ResponseWriter, r *http.Request) bool {
 	}
 
 	return true
-
-	/* 
-	if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
-		return false
-	} else {
-		return true
-	}
- 	*/
 }
 
 func checkAuthMiddleware(next http.Handler) http.Handler {
@@ -228,18 +295,20 @@ func main() {
 
 	gob.Register(User{})
 	template.Must(template.ParseGlob("templates/*.gohtml"))
-
  
 	rd = render.New()
 	router := mux.NewRouter()
 
-	router.NotFoundHandler = http.HandlerFunc(rootHandler)
-
-	router.HandleFunc("/", rootHandler)
+	//router.NotFoundHandler = http.HandlerFunc(rootHandler)
+	//router.HandleFunc("/", rootHandler)
 	router.HandleFunc("/login", loginHandler).Methods("POST")
 	router.HandleFunc("/logout", logoutHandler).Methods("POST")
 
-	router.HandleFunc("/jwtlogin", JWTloginHandler).Methods("POST")
+
+	router.NotFoundHandler = http.HandlerFunc(JWTRootHandler)
+	router.HandleFunc("/", JWTRootHandler)
+	router.HandleFunc("/jwtlogin", JWTloginHandler)
+	router.HandleFunc("/jwtlogout", JWTlogoutHandler)
 
 	billingRouter := router.PathPrefix("/billing").Subrouter()
 	billingRouter.HandleFunc("", BillingService)
@@ -252,9 +321,4 @@ func main() {
 	neg := negroni.Classic()
 	neg.UseHandler(router)
 	http.ListenAndServe(":7500", neg)
-
-	/*
-	to-do
-	1. 로그인 시 user 정보 저장
-	*/
 }
